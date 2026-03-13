@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Map Shop — Bulk CSV Generator</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #f4f7f3; min-height: 100vh; padding: 24px 16px; }
+  :root {
+    --green: #2d5a27; --green-mid: #4a7c42; --green-dark: #1a3a16;
+    --green-light: #e8f0e7; --border: #b5cdb2;
+  }
+  .header { background: var(--green); border-radius: 10px; padding: 20px 28px; margin-bottom: 24px; }
+  .header h1 { color: #fff; font-size: 20px; font-weight: 700; }
+  .header p  { color: #b5cdb2; font-size: 13px; margin-top: 2px; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; margin-bottom: 16px; }
+  label { font-weight: 600; color: var(--green-dark); font-size: 14px; display: block; margin-bottom: 6px; }
+  label span { font-weight: 400; color: #888; margin-left: 8px; }
+  input, textarea {
+    width: 100%; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 12px; font-size: 13px; outline: none; background: #fafcfa;
+    font-family: monospace; color: #333;
+  }
+  input:focus, textarea:focus { border-color: var(--green-mid); }
+  textarea { resize: vertical; }
+  .warn { color: #a16800; font-size: 12px; margin-top: 4px; }
+  .btns { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    border: none; border-radius: 6px; padding: 9px 20px;
+    font-weight: 600; font-size: 13.5px; cursor: pointer; color: #fff;
+    transition: opacity .15s;
+  }
+  button:disabled { background: #ccc !important; cursor: not-allowed; opacity: .6; }
+  .btn-parse  { background: var(--green-mid); }
+  .btn-run    { background: var(--green); }
+  .btn-dl     { background: #1a5276; }
+  .summary {
+    background: var(--green-light); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 16px; margin-bottom: 12px;
+    font-size: 13px; color: var(--green-dark); display: flex; gap: 20px; flex-wrap: wrap;
+  }
+  .summary .err { color: #721c24; }
+  .summary .pending { color: #a16800; }
+  .tbl-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); background: #fff; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead tr { background: var(--green); color: #fff; }
+  th { padding: 10px 14px; text-align: left; font-weight: 600; white-space: nowrap; }
+  td { padding: 9px 14px; vertical-align: top; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #fafcfa; }
+  .badge { border-radius: 12px; padding: 3px 10px; font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+  .mono { font-family: monospace; font-size: 11.5px; word-break: break-all; max-width: 180px; }
+  a { color: var(--green-mid); text-decoration: none; font-size: 11px; }
+  .empty { text-align: center; color: #aaa; padding: 48px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Map Shop</h1>
+  <p>WooCommerce Product Description — Bulk CSV Generator</p>
+</div>
+
+<div class="card">
+  <label>Anthropic API Key <span>— stored only in this browser session</span></label>
+  <input type="password" id="apiKey" placeholder="sk-ant-..." />
+  <div class="warn" id="apiWarn" style="display:none">⚠ Required before running.</div>
+</div>
+
+<div class="card">
+  <label>Apps Script Proxy URL <span>— your deployed Web App /exec URL</span></label>
+  <input type="text" id="proxyUrl" placeholder="https://script.google.com/macros/s/ABC.../exec" />
+  <div class="warn" id="proxyWarn" style="display:none">⚠ Required before running.</div>
+</div>
+
+<div class="card">
+  <label>Paste rows from Google Sheets <span>— Columns: (A) Row ID · (B) Product URL · (AD) Google Doc link</span></label>
+  <textarea id="pasted" rows="7" placeholder="1&#9;https://mapshop.com/product/example&#9;https://docs.google.com/document/d/ABC123/edit&#10;2&#9;..."></textarea>
+  <div class="btns">
+    <button class="btn-parse" id="btnParse" onclick="handleParse()">Parse Rows</button>
+    <button class="btn-run"   id="btnRun"   onclick="handleRun()" disabled>Run</button>
+    <button class="btn-dl"    id="btnDl"    onclick="handleDownload()" style="display:none">⬇ Download CSV</button>
+  </div>
+</div>
+
+<div class="summary" id="summary" style="display:none">
+  <span>Total: <b id="sTotal">0</b></span>
+  <span style="color:#155724">✓ Done: <b id="sDone">0</b></span>
+  <span class="err">✗ Errors: <b id="sErr">0</b></span>
+  <span class="pending">⏳ Pending: <b id="sPend">0</b></span>
+</div>
+
+<div id="tblWrap"></div>
+
+<script>
+let rows = [];
+let running = false;
+
+const STATUS_COLORS = {
+  Pending:  { bg: "#f5f5f5", text: "#666" },
+  Fetching: { bg: "#fffbe6", text: "#a16800" },
+  Cleaning: { bg: "#e8f0e7", text: "#1a3a16" },
+  Done:     { bg: "#d4edda", text: "#155724" },
+  Error:    { bg: "#f8d7da", text: "#721c24" },
+  "No Doc": { bg: "#fff3cd", text: "#856404" },
+};
+
+function slugFromUrl(url) {
+  try {
+    const u = new URL(url.trim());
+    return u.pathname.replace(/\/$/, "").split("/").filter(Boolean).pop() || url.trim();
+  } catch { return url.trim(); }
+}
+
+function extractDocId(url) {
+  const m = url.trim().replace(/['"]/g, "").match(/\/document\/d\/([a-zA-Z0-9_-]{20,})/);
+  return m ? m[1] : null;
+}
+
+function extractNewVersion(text) {
+  const markers = [/New\s+semantic\s+optimized\s+version\s*:/i, /New\s+version\s*:/i];
+  let startIdx = -1;
+  for (const marker of markers) {
+    const m = text.search(marker);
+    if (m !== -1) { startIdx = m + text.match(marker)[0].length; break; }
+  }
+  if (startIdx === -1) return null;
+  const after = text.slice(startIdx);
+  const stop = after.search(/\n\s*[-=]{3,}\s*\n|\nCurrent\s+version\s*:/i);
+  return (stop !== -1 ? after.slice(0, stop) : after).trim();
+}
+
+function handleParse() {
+  const raw = document.getElementById("pasted").value.trim();
+  if (!raw) return;
+  rows = raw.split("\n").map((line, i) => {
+    const cols = line.split("\t");
+    return {
+      id: i,
+      rowId: cols[0]?.trim() || "",
+      productUrl: cols[1]?.trim() || "",
+      docUrl: cols[2]?.trim() || "",
+      status: "Pending",
+      slug: slugFromUrl(cols[1]?.trim() || ""),
+      description: "",
+      error: "",
+    };
+  }).filter(r => r.rowId || r.productUrl || r.docUrl);
+  renderTable();
+  updateRunBtn();
+}
+
+function updateRow(id, patch) {
+  const r = rows.find(r => r.id === id);
+  if (r) Object.assign(r, patch);
+  renderTable();
+}
+
+function renderTable() {
+  const wrap = document.getElementById("tblWrap");
+  if (!rows.length) { wrap.innerHTML = `<div class="empty">Paste your spreadsheet rows above and click <b>Parse Rows</b> to begin.</div>`; updateSummary(); return; }
+
+  const doneCount = rows.filter(r => r.status === "Done").length;
+  document.getElementById("btnDl").style.display = doneCount > 0 ? "inline-block" : "none";
+  document.getElementById("btnDl").textContent = `⬇ Download CSV (${doneCount} rows)`;
+  updateSummary();
+
+  let html = `<div class="tbl-wrap"><table><thead><tr>
+    <th>#</th><th>Row ID</th><th>Slug</th><th>Doc</th><th>Status</th><th>Preview / Error</th>
+  </tr></thead><tbody>`;
+
+  rows.forEach((r, i) => {
+    const sc = STATUS_COLORS[r.status] || STATUS_COLORS.Pending;
+    const preview = r.error
+      ? `<span style="color:#721c24">${esc(r.error)}</span>`
+      : r.description
+        ? esc(r.description.replace(/<[^>]+>/g, "").slice(0, 120)) + (r.description.length > 120 ? "…" : "")
+        : `<span style="color:#bbb">—</span>`;
+    html += `<tr>
+      <td>${i+1}</td>
+      <td>${esc(r.rowId)}</td>
+      <td class="mono">${esc(r.slug)}</td>
+      <td>${r.docUrl ? `<a href="${esc(r.docUrl)}" target="_blank">Open ↗</a>` : "—"}</td>
+      <td><span class="badge" style="background:${sc.bg};color:${sc.text}">${r.status}</span></td>
+      <td style="max-width:340px;font-size:11.5px">${preview}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>`;
+  wrap.innerHTML = html;
+}
+
+function updateSummary() {
+  const s = document.getElementById("summary");
+  if (!rows.length) { s.style.display = "none"; return; }
+  s.style.display = "flex";
+  document.getElementById("sTotal").textContent = rows.length;
+  document.getElementById("sDone").textContent  = rows.filter(r => r.status === "Done").length;
+  document.getElementById("sErr").textContent   = rows.filter(r => r.status === "Error" || r.status === "No Doc").length;
+  document.getElementById("sPend").textContent  = rows.filter(r => ["Pending","Fetching","Cleaning"].includes(r.status)).length;
+}
+
+function updateRunBtn() {
+  const btn = document.getElementById("btnRun");
+  btn.disabled = !rows.length || running;
+  btn.textContent = running ? "Processing…" : `Run (${rows.length} rows)`;
+}
+
+async function fetchDocText(docId) {
+  const proxy = document.getElementById("proxyUrl").value.trim();
+  const res = await fetch(`${proxy}?docId=${encodeURIComponent(docId)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  if (text.startsWith("ERROR:")) throw new Error(text.replace("ERROR:", ""));
+  return text;
+}
+
+async function callClaude(rawText) {
+  const key = document.getElementById("apiKey").value.trim();
+  const system = `You are a product description formatter for Map Shop (mapshop.com).
+
+Rules (strictly follow all):
+1. Always write the company name as "Map Shop" — never Mapshop, Map shop, MAP SHOP, or any other variant.
+2. Remove ALL bold formatting EXCEPT the map title, which should remain in <strong>.
+3. Never include any pricing information.
+4. Never mention sizing (dimensions) or publication years UNLESS the product is a historical map or congressional map — those are exceptions.
+5. Remove filler phrases such as: "whether you're a…", "perfect for anyone who…", "look no further", "whatever your need", "no matter your", and similar padding.
+6. Output clean HTML using ONLY these tags: <p> <ul> <li> <strong>. No other tags, no markdown, no code fences.
+7. Do not add any preamble or explanation — output ONLY the HTML product description.`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      system,
+      messages: [{ role: "user", content: `Format this product description:\n\n${rawText}` }]
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || `API error ${res.status}`);
+  const block = data.content?.find(b => b.type === "text");
+  if (!block) throw new Error("No text in response");
+  return block.text.trim();
+}
+
+async function processRow(row) {
+  updateRow(row.id, { status: "Fetching" });
+  const docId = extractDocId(row.docUrl);
+  if (!docId) { updateRow(row.id, { status: "Error", error: "Could not parse Doc ID" }); return; }
+
+  let docText;
+  try { docText = await fetchDocText(docId); }
+  catch(e) { updateRow(row.id, { status: "Error", error: "Fetch: " + e.message }); return; }
+
+  const extracted = extractNewVersion(docText);
+  if (!extracted) { updateRow(row.id, { status: "No Doc", error: "No 'New Version:' section found" }); return; }
+
+  updateRow(row.id, { status: "Cleaning" });
+  try {
+    const html = await callClaude(extracted);
+    updateRow(row.id, { status: "Done", description: html });
+  } catch(e) { updateRow(row.id, { status: "Error", error: "Claude: " + e.message }); }
+}
+
+async function handleRun() {
+  const key   = document.getElementById("apiKey").value.trim();
+  const proxy = document.getElementById("proxyUrl").value.trim();
+  if (!key)   { document.getElementById("apiWarn").style.display = "block"; return; }
+  if (!proxy) { document.getElementById("proxyWarn").style.display = "block"; return; }
+
+  running = true;
+  updateRunBtn();
+  const BATCH = 3;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    await Promise.all(rows.slice(i, i + BATCH).map(r => processRow(r)));
+    if (i + BATCH < rows.length) await new Promise(r => setTimeout(r, 800));
+  }
+  running = false;
+  updateRunBtn();
+}
+
+function handleDownload() {
+  const done = rows.filter(r => r.status === "Done");
+  const csv = ["slug,description", ...done.map(r => `"${r.slug.replace(/"/g,'""')}","${r.description.replace(/"/g,'""')}"`)] .join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+  a.download = "mapshop_descriptions.csv";
+  a.click();
+}
+
+function esc(s) {
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// Init
+renderTable();
+</script>
+</body>
+</html>
