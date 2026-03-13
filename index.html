@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Map Shop — Bulk CSV Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', sans-serif; background: #f4f7f3; min-height: 100vh; padding: 24px 16px; color: #222; }
@@ -38,6 +39,10 @@
   .badge { border-radius:12px; padding:3px 10px; font-weight:600; font-size:11.5px; white-space:nowrap; display:inline-block; }
   a { color:var(--mid); text-decoration:none; font-size:11px; }
   .empty { text-align:center; color:#aaa; padding:48px 0; font-size:14px; }
+  .sku-status { font-size:12.5px; margin-top:6px; padding:6px 10px; border-radius:5px; }
+  .sku-ok   { background:#d4edda; color:#155724; }
+  .sku-err  { background:#f8d7da; color:#721c24; }
+  .sku-load { background:#fffbe6; color:#a16800; }
 </style>
 </head>
 <body>
@@ -47,7 +52,10 @@
   <p>WooCommerce Product Description — Bulk CSV Generator</p>
 </div>
 
-
+<div class="card">
+  <label>SKU Mapping <span>— loaded from AllSKUsAndSlugs.xlsx in your GitHub repo</span></label>
+  <div class="sku-status sku-load" id="skuStatus">⏳ Loading SKU mapping…</div>
+</div>
 
 <div class="card">
   <label>Paste rows from Google Sheets <span>— (B) Product URL · (AD) Google Doc link</span></label>
@@ -69,6 +77,11 @@
 <div id="tblWrap"><div class="empty">Paste your spreadsheet rows above and click <b>Parse Rows</b> to begin.</div></div>
 
 <script>
+const PROXY_URL = "https://script.google.com/macros/s/AKfycbycrE2HwuGh_UQumc4PvJMobSr6C2ta59AUan6hGeRNGae4TMSFS29pntcHggnb_Z-SAQ/exec";
+const XLSX_URL  = "https://raw.githubusercontent.com/ethan-mapshop/product-descriptions/main/AllSKUsAndSlugs.xlsx";
+
+let skuMap  = {}; // url -> sku
+let skuReady = false;
 let rows = [];
 let running = false;
 
@@ -81,9 +94,43 @@ const STATUS_COLORS = {
   "No Doc": { bg:"#fff3cd", text:"#856404" },
 };
 
-function slugFromUrl(url) {
-  try { return new URL(url.trim()).pathname.replace(/\/$/,"").split("/").filter(Boolean).pop() || url.trim(); }
-  catch { return url.trim(); }
+// Load SKU mapping on startup
+async function loadSkuMap() {
+  try {
+    const res = await fetch(XLSX_URL);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const buf  = await res.arrayBuffer();
+    const wb   = XLSX.read(buf, { type: "array" });
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    let count = 0;
+    for (const row of data) {
+      const sku = String(row[4] || "").trim(); // col E (index 4)
+      const url = String(row[5] || "").trim(); // col F (index 5)
+      if (sku && url) {
+        // normalise URL: strip trailing slash and lowercasé
+        skuMap[normaliseUrl(url)] = sku;
+        count++;
+      }
+    }
+    skuReady = true;
+    document.getElementById("skuStatus").className = "sku-status sku-ok";
+    document.getElementById("skuStatus").textContent = `✓ SKU mapping loaded — ${count.toLocaleString()} products`;
+  } catch(e) {
+    document.getElementById("skuStatus").className = "sku-status sku-err";
+    document.getElementById("skuStatus").textContent = "✗ Failed to load SKU mapping: " + e.message;
+  }
+}
+
+function normaliseUrl(url) {
+  try {
+    const u = new URL(url.trim());
+    return (u.hostname + u.pathname).replace(/\/+$/,"").toLowerCase();
+  } catch { return url.trim().toLowerCase(); }
+}
+
+function skuFromUrl(url) {
+  return skuMap[normaliseUrl(url)] || null;
 }
 
 function extractDocId(url) {
@@ -109,12 +156,14 @@ function handleParse() {
   if (!raw) return;
   rows = raw.split("\n").map((line, i) => {
     const cols = line.split("\t");
+    const productUrl = cols[0]?.trim() || "";
+    const sku = skuFromUrl(productUrl);
     return {
       id: i,
       rowId:       i + 1,
-      productUrl:  cols[0]?.trim() || "",
+      productUrl,
       docUrl:      cols[1]?.trim() || "",
-      slug:        slugFromUrl(cols[0]?.trim() || ""),
+      sku:         sku || "(no SKU match)",
       status:      "Pending",
       description: "",
       error:       "",
@@ -143,10 +192,11 @@ function renderTable() {
   dl.textContent = `⬇ Download CSV (${doneCount} rows)`;
 
   let html = `<div class="tbl-wrap"><table><thead><tr>
-    <th>#</th><th>Row ID</th><th>Slug</th><th>Doc</th><th>Status</th><th style="min-width:260px">Preview / Error</th>
+    <th>#</th><th>SKU</th><th>Product URL</th><th>Doc</th><th>Status</th><th style="min-width:260px">Preview / Error</th>
   </tr></thead><tbody>`;
   rows.forEach((r, i) => {
     const sc = STATUS_COLORS[r.status] || STATUS_COLORS.Pending;
+    const noSku = r.sku === "(no SKU match)";
     const preview = r.error
       ? `<span style="color:#721c24">${esc(r.error)}</span>`
       : r.description
@@ -154,8 +204,8 @@ function renderTable() {
         : `<span style="color:#bbb">—</span>`;
     html += `<tr>
       <td>${i+1}</td>
-      <td>${esc(r.rowId)}</td>
-      <td style="font-family:monospace;font-size:11.5px;max-width:180px;word-break:break-all">${esc(r.slug)}</td>
+      <td style="font-family:monospace;font-size:11.5px;${noSku ? 'color:#a16800' : ''}">${esc(r.sku)}</td>
+      <td style="font-size:11.5px;max-width:180px;word-break:break-all">${esc(r.productUrl)}</td>
       <td>${r.docUrl ? `<a href="${esc(r.docUrl)}" target="_blank">Open ↗</a>` : "—"}</td>
       <td><span class="badge" style="background:${sc.bg};color:${sc.text}">${r.status}</span></td>
       <td style="font-size:11.5px;max-width:340px">${preview}</td>
@@ -176,8 +226,7 @@ function updateSummary() {
 }
 
 async function callProxy(params) {
-  const proxy = "https://script.google.com/macros/s/AKfycbycrE2HwuGh_UQumc4PvJMobSr6C2ta59AUan6hGeRNGae4TMSFS29pntcHggnb_Z-SAQ/exec";
-  const url = proxy + "?" + Object.entries(params).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+  const url = PROXY_URL + "?" + Object.entries(params).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
   const data = await res.json();
@@ -222,8 +271,8 @@ async function handleRun() {
 
 function handleDownload() {
   const done = rows.filter(r => r.status === "Done");
-  const csv = ["slug,description", ...done.map(r =>
-    `"${r.slug.replace(/"/g,'""')}","${r.description.replace(/"/g,'""')}"`
+  const csv = ["sku,description", ...done.map(r =>
+    `"${(r.sku||"").replace(/"/g,'""')}","${r.description.replace(/"/g,'""')}"`
   )].join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type:"text/csv;charset=utf-8;" }));
@@ -234,6 +283,9 @@ function handleDownload() {
 function esc(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
+
+// Boot
+loadSkuMap();
 </script>
 </body>
 </html>
