@@ -8,9 +8,9 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', sans-serif; background: #f4f7f3; min-height: 100vh; padding: 24px 16px; color: #222; }
   :root { --green:#2d5a27; --mid:#4a7c42; --dark:#1a3a16; --light:#e8f0e7; --border:#b5cdb2; }
-  h1 { color:#fff; font-size:20px; font-weight:700; }
-  .sub { color:#b5cdb2; font-size:13px; margin-top:2px; }
   .header { background:var(--green); border-radius:10px; padding:20px 28px; margin-bottom:24px; }
+  .header h1 { color:#fff; font-size:20px; font-weight:700; }
+  .header p  { color:#b5cdb2; font-size:13px; margin-top:2px; }
   .card { background:#fff; border:1px solid var(--border); border-radius:8px; padding:18px 20px; margin-bottom:16px; }
   label { font-weight:600; color:var(--dark); font-size:14px; display:block; margin-bottom:6px; }
   label span { font-weight:400; color:#888; margin-left:8px; font-size:13px; }
@@ -21,9 +21,8 @@
   }
   input:focus, textarea:focus { border-color:var(--mid); }
   textarea { resize:vertical; }
-  .warn { color:#a16800; font-size:12px; margin-top:5px; }
   .btns { margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; }
-  button { border:none; border-radius:6px; padding:9px 20px; font-weight:600; font-size:13.5px; cursor:pointer; color:#fff; transition:opacity .15s; }
+  button { border:none; border-radius:6px; padding:9px 20px; font-weight:600; font-size:13.5px; cursor:pointer; color:#fff; }
   button:disabled { background:#ccc!important; cursor:not-allowed; opacity:.6; }
   .btn-parse { background:var(--mid); }
   .btn-run   { background:var(--green); }
@@ -38,25 +37,14 @@
   tbody tr:nth-child(even) td { background:#fafcfa; }
   .badge { border-radius:12px; padding:3px 10px; font-weight:600; font-size:11.5px; white-space:nowrap; display:inline-block; }
   a { color:var(--mid); text-decoration:none; font-size:11px; }
-  a:hover { text-decoration:underline; }
   .empty { text-align:center; color:#aaa; padding:48px 0; font-size:14px; }
-  .note { background:#f0f7ff; border:1px solid #b8d4f0; border-radius:6px; padding:10px 14px; font-size:12.5px; color:#1a4a7a; margin-bottom:16px; }
 </style>
 </head>
 <body>
 
 <div class="header">
   <h1>Map Shop</h1>
-  <p class="sub">WooCommerce Product Description — Bulk CSV Generator</p>
-</div>
-
-<div class="note">
-  🔒 Your API key and proxy URL are stored only in this browser session and never sent anywhere except their respective services.
-</div>
-
-<div class="card">
-  <label>Anthropic API Key <span>— create one at console.anthropic.com</span></label>
-  <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" />
+  <p>WooCommerce Product Description — Bulk CSV Generator</p>
 </div>
 
 <div class="card">
@@ -190,45 +178,14 @@ function updateSummary() {
   document.getElementById("sPend").textContent  = rows.filter(r => ["Pending","Fetching","Cleaning"].includes(r.status)).length;
 }
 
-async function fetchDocText(docId) {
+async function callProxy(params) {
   const proxy = document.getElementById("proxyUrl").value.trim();
-  const res = await fetch(`${proxy}?docId=${encodeURIComponent(docId)}`);
+  const url = proxy + "?" + Object.entries(params).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
-  const text = await res.text();
-  if (text.startsWith("ERROR:")) throw new Error(text.replace("ERROR:",""));
-  return text;
-}
-
-async function callClaude(rawText) {
-  const key = document.getElementById("apiKey").value.trim();
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system: `You are a product description formatter for Map Shop (mapshop.com).
-
-Rules (strictly follow all):
-1. Always write the company name as "Map Shop" — never Mapshop, Map shop, MAP SHOP, or any other variant.
-2. Remove ALL bold formatting EXCEPT the map title, which should remain in <strong>.
-3. Never include any pricing information.
-4. Never mention sizing (dimensions) or publication years UNLESS the product is a historical map or congressional map — those are exceptions.
-5. Remove filler phrases such as: "whether you're a…", "perfect for anyone who…", "look no further", "whatever your need", "no matter your", and similar padding.
-6. Output clean HTML using ONLY these tags: <p> <ul> <li> <strong>. No other tags, no markdown, no code fences.
-7. Do not add any preamble or explanation — output ONLY the HTML product description.`,
-      messages: [{ role: "user", content: `Format this product description:\n\n${rawText}` }]
-    })
-  });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || `API ${res.status}`);
-  const block = data.content?.find(b => b.type === "text");
-  if (!block) throw new Error("No text in response");
-  return block.text.trim();
+  if (data.error) throw new Error(data.error);
+  return data;
 }
 
 async function processRow(row) {
@@ -237,35 +194,32 @@ async function processRow(row) {
   if (!docId) { updateRow(row.id, { status:"Error", error:"Could not parse Doc ID" }); return; }
 
   let docText;
-  try { docText = await fetchDocText(docId); }
-  catch(e) { updateRow(row.id, { status:"Error", error:"Fetch: " + e.message }); return; }
+  try {
+    const data = await callProxy({ action:"fetchDoc", docId });
+    docText = data.text;
+  } catch(e) { updateRow(row.id, { status:"Error", error:"Fetch: " + e.message }); return; }
 
   const extracted = extractNewVersion(docText);
-  if (!extracted) { updateRow(row.id, { status:"No Doc", error:"No 'New Version:' section found in doc" }); return; }
+  if (!extracted) { updateRow(row.id, { status:"No Doc", error:"No 'New Version:' section found" }); return; }
 
   updateRow(row.id, { status:"Cleaning" });
   try {
-    const html = await callClaude(extracted);
-    updateRow(row.id, { status:"Done", description:html });
+    const data = await callProxy({ action:"clean", text: extracted });
+    updateRow(row.id, { status:"Done", description: data.html });
   } catch(e) { updateRow(row.id, { status:"Error", error:"Claude: " + e.message }); }
 }
 
 async function handleRun() {
-  const key   = document.getElementById("apiKey").value.trim();
   const proxy = document.getElementById("proxyUrl").value.trim();
-  if (!key)   { alert("Please enter your Anthropic API key."); return; }
   if (!proxy) { alert("Please enter your Apps Script proxy URL."); return; }
-
   running = true;
   document.getElementById("btnRun").disabled = true;
   document.getElementById("btnRun").textContent = "Processing…";
-
   const BATCH = 3;
   for (let i = 0; i < rows.length; i += BATCH) {
     await Promise.all(rows.slice(i, i + BATCH).map(r => processRow(r)));
     if (i + BATCH < rows.length) await new Promise(r => setTimeout(r, 800));
   }
-
   running = false;
   document.getElementById("btnRun").disabled = false;
   document.getElementById("btnRun").textContent = `Run (${rows.length} rows)`;
