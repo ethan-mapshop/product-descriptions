@@ -47,14 +47,11 @@
   <p>WooCommerce Product Description — Bulk CSV Generator</p>
 </div>
 
-<div class="card">
-  <label>Apps Script Proxy URL <span>— your deployed Web App /exec URL</span></label>
-  <input type="text" id="proxyUrl" placeholder="https://script.google.com/macros/s/ABC.../exec" />
-</div>
+
 
 <div class="card">
-  <label>Paste rows from Google Sheets <span>— (A) Row ID · (B) Product URL · (AD) Google Doc link</span></label>
-  <textarea id="pasted" rows="8" placeholder="1&#9;https://mapshop.com/product/example&#9;https://docs.google.com/document/d/ABC123/edit&#10;2&#9;..."></textarea>
+  <label>Paste rows from Google Sheets <span>— (B) Product URL · (AD) Google Doc link</span></label>
+  <textarea id="pasted" rows="8" placeholder="https://mapshop.com/product/example&#9;https://docs.google.com/document/d/ABC123/edit&#10;..."></textarea>
   <div class="btns">
     <button class="btn-parse" id="btnParse" onclick="handleParse()">Parse Rows</button>
     <button class="btn-run"   id="btnRun"   onclick="handleRun()" disabled>Run</button>
@@ -114,15 +111,15 @@ function handleParse() {
     const cols = line.split("\t");
     return {
       id: i,
-      rowId:       cols[0]?.trim() || "",
-      productUrl:  cols[1]?.trim() || "",
-      docUrl:      cols[2]?.trim() || "",
-      slug:        slugFromUrl(cols[1]?.trim() || ""),
+      rowId:       i + 1,
+      productUrl:  cols[0]?.trim() || "",
+      docUrl:      cols[1]?.trim() || "",
+      slug:        slugFromUrl(cols[0]?.trim() || ""),
       status:      "Pending",
       description: "",
       error:       "",
     };
-  }).filter(r => r.rowId || r.productUrl || r.docUrl);
+  }).filter(r => r.productUrl || r.docUrl);
   renderTable();
   document.getElementById("btnRun").disabled = !rows.length;
   document.getElementById("btnRun").textContent = `Run (${rows.length} rows)`;
@@ -179,7 +176,7 @@ function updateSummary() {
 }
 
 async function callProxy(params) {
-  const proxy = document.getElementById("proxyUrl").value.trim();
+  const proxy = "https://script.google.com/macros/s/AKfycbycrE2HwuGh_UQumc4PvJMobSr6C2ta59AUan6hGeRNGae4TMSFS29pntcHggnb_Z-SAQ/exec";
   const url = proxy + "?" + Object.entries(params).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
@@ -210,8 +207,6 @@ async function processRow(row) {
 }
 
 async function handleRun() {
-  const proxy = document.getElementById("proxyUrl").value.trim();
-  if (!proxy) { alert("Please enter your Apps Script proxy URL."); return; }
   running = true;
   document.getElementById("btnRun").disabled = true;
   document.getElementById("btnRun").textContent = "Processing…";
