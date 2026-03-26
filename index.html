@@ -245,8 +245,7 @@ async function processRow(row) {
     docText = data.text;
   } catch(e) { updateRow(row.id, { status:"Error", error:"Fetch: " + e.message }); return; }
 
-  const extracted = extractNewVersion(docText);
-  if (!extracted) { updateRow(row.id, { status:"No Doc", error:"No 'New Version:' section found" }); return; }
+  const extracted = extractNewVersion(docText) || docText.trim();
 
   updateRow(row.id, { status:"Cleaning" });
   try {
