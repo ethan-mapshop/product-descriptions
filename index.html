@@ -27,6 +27,7 @@
   button:disabled { background:#ccc!important; cursor:not-allowed; opacity:.6; }
   .btn-parse { background:var(--mid); }
   .btn-run   { background:var(--green); }
+  .btn-retry { background:#b7791f; }
   .btn-dl    { background:#1a5276; }
   .summary { background:var(--light); border:1px solid var(--border); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--dark); display:flex; gap:20px; flex-wrap:wrap; }
   .tbl-wrap { overflow-x:auto; border-radius:8px; border:1px solid var(--border); background:#fff; }
@@ -63,6 +64,7 @@
   <div class="btns">
     <button class="btn-parse" id="btnParse" onclick="handleParse()">Parse Rows</button>
     <button class="btn-run"   id="btnRun"   onclick="handleRun()" disabled>Run</button>
+    <button class="btn-retry" id="btnRetry" onclick="handleRetryErrors()" style="display:none">↻ Retry Errors</button>
     <button class="btn-dl"    id="btnDl"    onclick="handleDownload()" style="display:none">⬇ Download CSV</button>
   </div>
 </div>
@@ -170,8 +172,6 @@ function handleParse() {
     };
   }).filter(r => r.productUrl || r.docUrl);
   renderTable();
-  document.getElementById("btnRun").disabled = !rows.length;
-  document.getElementById("btnRun").textContent = `Run (${rows.length} rows)`;
 }
 
 function updateRow(id, patch) {
@@ -182,14 +182,30 @@ function updateRow(id, patch) {
 
 function renderTable() {
   updateSummary();
+
+  const doneCount = rows.filter(r => r.status === "Done").length;
+  const errCount  = rows.filter(r => r.status === "Error" || r.status === "No Doc").length;
+
+  // Run button
+  const btnRun = document.getElementById("btnRun");
+  btnRun.disabled    = running || !rows.length;
+  btnRun.textContent = running ? "Processing…" : (rows.length ? `Run (${rows.length} rows)` : "Run");
+
+  // Retry Errors button — only shown when there are errored rows
+  const btnRetry = document.getElementById("btnRetry");
+  btnRetry.style.display = errCount > 0 ? "inline-block" : "none";
+  btnRetry.disabled      = running;
+  btnRetry.textContent   = `↻ Retry Errors (${errCount})`;
+
+  // Download button
+  const dl = document.getElementById("btnDl");
+  dl.style.display = doneCount > 0 ? "inline-block" : "none";
+  dl.textContent   = `⬇ Download CSV (${doneCount} rows)`;
+
   if (!rows.length) {
     document.getElementById("tblWrap").innerHTML = `<div class="empty">Paste your spreadsheet rows above and click <b>Parse Rows</b> to begin.</div>`;
     return;
   }
-  const doneCount = rows.filter(r => r.status === "Done").length;
-  const dl = document.getElementById("btnDl");
-  dl.style.display = doneCount > 0 ? "inline-block" : "none";
-  dl.textContent = `⬇ Download CSV (${doneCount} rows)`;
 
   let html = `<div class="tbl-wrap"><table><thead><tr>
     <th>#</th><th>SKU</th><th>Product URL</th><th>Doc</th><th>Status</th><th style="min-width:260px">Preview / Error</th>
@@ -245,8 +261,7 @@ async function processRow(row) {
     docText = data.text;
   } catch(e) { updateRow(row.id, { status:"Error", error:"Fetch: " + e.message }); return; }
 
-  const extracted = extractNewVersion(docText);
-  if (!extracted) { updateRow(row.id, { status:"No Doc", error:"No 'New Version:' section found" }); return; }
+  const extracted = extractNewVersion(docText) || docText.trim();
 
   updateRow(row.id, { status:"Cleaning" });
   try {
@@ -255,18 +270,35 @@ async function processRow(row) {
   } catch(e) { updateRow(row.id, { status:"Error", error:"Claude: " + e.message }); }
 }
 
-async function handleRun() {
-  running = true;
-  document.getElementById("btnRun").disabled = true;
-  document.getElementById("btnRun").textContent = "Processing…";
+// Shared batch runner — used by both Run and Retry Errors
+async function processRows(list) {
   const BATCH = 3;
-  for (let i = 0; i < rows.length; i += BATCH) {
-    await Promise.all(rows.slice(i, i + BATCH).map(r => processRow(r)));
-    if (i + BATCH < rows.length) await new Promise(r => setTimeout(r, 800));
+  for (let i = 0; i < list.length; i += BATCH) {
+    await Promise.all(list.slice(i, i + BATCH).map(r => processRow(r)));
+    if (i + BATCH < list.length) await new Promise(r => setTimeout(r, 800));
   }
+}
+
+async function handleRun() {
+  if (running || !rows.length) return;
+  running = true;
+  renderTable();
+  await processRows(rows);
   running = false;
-  document.getElementById("btnRun").disabled = false;
-  document.getElementById("btnRun").textContent = `Run (${rows.length} rows)`;
+  renderTable();
+}
+
+async function handleRetryErrors() {
+  if (running) return;
+  const errored = rows.filter(r => r.status === "Error" || r.status === "No Doc");
+  if (!errored.length) return;
+  // Reset just the errored rows back to Pending, leave everything else untouched
+  errored.forEach(r => { r.status = "Pending"; r.error = ""; });
+  running = true;
+  renderTable();
+  await processRows(errored);
+  running = false;
+  renderTable();
 }
 
 function handleDownload() {
