@@ -161,13 +161,16 @@ const words = s => s.match(/[A-Za-z0-9]+/g) || [];
 
 function extractVideos(text) {
   const slots = []; // one per spot in the text; back-to-back videos share a slot
+  const seen = new Set();
   let out = "", last = 0;
   for (const m of text.matchAll(VIDEO_RE)) {
     const between = text.slice(last, m.index);
     out += between;
+    last = m.index + m[0].length;
+    if (seen.has(m[0])) continue; // same video twice, e.g. a link whose text is its own URL
+    seen.add(m[0]);
     if (slots.length && !/[A-Za-z0-9]/.test(between)) slots[slots.length - 1].urls.push(m[0]);
     else slots.push({ urls: [m[0]], at: out.length });
-    last = m.index + m[0].length;
   }
   out += text.slice(last);
   slots.forEach(s => {
