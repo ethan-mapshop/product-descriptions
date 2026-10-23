@@ -153,6 +153,80 @@ function extractNewVersion(text) {
   return (stop !== -1 ? after.slice(0, stop) : after).trim();
 }
 
+// Video URLs are pulled out before cleaning (Claude drops them), then put back as
+// WordPress [video] shortcodes next to the words that surrounded them in the Doc.
+const VIDEO_RE = /https?:\/\/[^\s"'<>]+?\.(mp4|m4v|webm|ogv)\b(?:\?[^\s"'<>]*)?/gi;
+
+const words = s => s.match(/[A-Za-z0-9]+/g) || [];
+
+function extractVideos(text) {
+  const slots = []; // one per spot in the text; back-to-back videos share a slot
+  let out = "", last = 0;
+  for (const m of text.matchAll(VIDEO_RE)) {
+    const between = text.slice(last, m.index);
+    out += between;
+    if (slots.length && !/[A-Za-z0-9]/.test(between)) slots[slots.length - 1].urls.push(m[0]);
+    else slots.push({ urls: [m[0]], at: out.length });
+    last = m.index + m[0].length;
+  }
+  out += text.slice(last);
+  slots.forEach(s => {
+    s.before = words(out.slice(0, s.at)).slice(-4);
+    s.after  = words(out.slice(s.at)).slice(0, 4);
+  });
+  return { text: out, slots };
+}
+
+// Finds a run of words in HTML, allowing tags, entities and punctuation between them
+function findPhrase(html, ws) {
+  if (!ws.length) return null;
+  const m = new RegExp(`\\b${ws.join("(?:&[a-z0-9#]+;|<[^>]*>|[^a-z0-9])+")}\\b`, "i").exec(html);
+  return m && { start: m.index, end: m.index + m[0].length };
+}
+
+function videoShortcode(url) {
+  const ext = url.match(/\.(mp4|m4v|webm|ogv)\b/i)[1].toLowerCase();
+  return `[video width="800" text-align="center" ${ext}="${url}" loop="true" autoplay="false"][/video]`;
+}
+
+function placeVideos(html, slots) {
+  let count = 0, missing = 0;
+  for (const s of slots) {
+    const code = s.urls.map(videoShortcode).join("\n");
+    count += s.urls.length;
+    if (!s.before.length) { html = code + "\n" + html; continue; } // video was the first thing in the Doc
+
+    const before = findPhrase(html, s.before);
+    if (before) { // after the block holding the preceding words
+      const close = /<\/(p|ul|ol)>/i.exec(html.slice(before.end));
+      const pos = close ? before.end + close.index + close[0].length : html.length;
+      html = html.slice(0, pos) + "\n" + code + html.slice(pos);
+      continue;
+    }
+    const after = findPhrase(html, s.after);
+    if (after) { // before the block holding the following words
+      const opens = [...html.slice(0, after.start).matchAll(/<(p|ul|ol)\b/gi)];
+      const pos = opens.length ? opens[opens.length - 1].index : after.start;
+      html = html.slice(0, pos) + code + "\n" + html.slice(pos);
+      continue;
+    }
+    // Surrounding text was reworded — fall back to after the first non-title paragraph
+    missing += s.urls.length;
+    const first = /<p>(?!\s*<strong>[^<]*<\/strong>\s*<\/p>)[\s\S]*?<\/p>/i.exec(html);
+    const pos = first ? first.index + first[0].length : html.length;
+    html = html.slice(0, pos) + "\n" + code + html.slice(pos);
+  }
+  return { html, count, missing };
+}
+
+function videoNote(count, missing) {
+  if (!count) return "";
+  const s = n => n === 1 ? "" : "s";
+  return missing
+    ? `⚠ ${missing} video${s(missing)} placed after first paragraph — check placement`
+    : `🎬 ${count} video${s(count)} embedded`;
+}
+
 function handleParse() {
   const raw = document.getElementById("pasted").value.trim();
   if (!raw) return;
@@ -169,6 +243,7 @@ function handleParse() {
       status:      "Pending",
       description: "",
       error:       "",
+      note:        "",
     };
   }).filter(r => r.productUrl || r.docUrl);
   renderTable();
@@ -218,13 +293,16 @@ function renderTable() {
       : r.description
         ? esc(r.description.replace(/<[^>]+>/g,"").slice(0,120)) + (r.description.length > 120 ? "…" : "")
         : `<span style="color:#bbb">—</span>`;
+    const note = r.note && !r.error
+      ? `<div style="font-weight:600;margin-bottom:3px;color:${r.noteWarn ? '#a16800' : 'var(--mid)'}">${esc(r.note)}</div>`
+      : "";
     html += `<tr>
       <td>${i+1}</td>
       <td style="font-family:monospace;font-size:11.5px;${noSku ? 'color:#a16800' : ''}">${esc(r.sku)}</td>
       <td style="font-size:11.5px;max-width:180px;word-break:break-all">${esc(r.productUrl)}</td>
       <td>${r.docUrl ? `<a href="${esc(r.docUrl)}" target="_blank">Open ↗</a>` : "—"}</td>
       <td><span class="badge" style="background:${sc.bg};color:${sc.text}">${r.status}</span></td>
-      <td style="font-size:11.5px;max-width:340px">${preview}</td>
+      <td style="font-size:11.5px;max-width:340px">${note}${preview}</td>
     </tr>`;
   });
   html += `</tbody></table></div>`;
@@ -251,7 +329,7 @@ async function callProxy(params) {
 }
 
 async function processRow(row) {
-  updateRow(row.id, { status:"Fetching", error:"" });
+  updateRow(row.id, { status:"Fetching", error:"", note:"" });
   const docId = extractDocId(row.docUrl);
   if (!docId) { updateRow(row.id, { status:"Error", error:"Could not parse Doc ID" }); return; }
 
@@ -262,11 +340,13 @@ async function processRow(row) {
   } catch(e) { updateRow(row.id, { status:"Error", error:"Fetch: " + e.message }); return; }
 
   const extracted = extractNewVersion(docText) || docText.trim();
+  const { text, slots } = extractVideos(extracted);
 
   updateRow(row.id, { status:"Cleaning" });
   try {
-    const data = await callProxy({ action:"clean", text: extracted });
-    updateRow(row.id, { status:"Done", description: data.html });
+    const data = await callProxy({ action:"clean", text });
+    const { html, count, missing } = placeVideos(data.html, slots);
+    updateRow(row.id, { status:"Done", description: html, note: videoNote(count, missing), noteWarn: missing > 0 });
   } catch(e) { updateRow(row.id, { status:"Error", error:"Claude: " + e.message }); }
 }
 
