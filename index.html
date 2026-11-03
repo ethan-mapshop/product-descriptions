@@ -9,9 +9,11 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', sans-serif; background: #f4f7f3; min-height: 100vh; padding: 24px 16px; color: #222; }
   :root { --green:#2d5a27; --mid:#4a7c42; --dark:#1a3a16; --light:#e8f0e7; --border:#b5cdb2; }
-  .header { background:var(--green); border-radius:10px; padding:20px 28px; margin-bottom:24px; }
+  .header { background:var(--green); border-radius:10px; padding:20px 28px; margin-bottom:24px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
   .header h1 { color:#fff; font-size:20px; font-weight:700; }
   .header p  { color:#b5cdb2; font-size:13px; margin-top:2px; }
+  .tabs a    { color:#b5cdb2; font-size:13px; font-weight:600; padding:6px 12px; border-radius:6px; }
+  .tabs a.on { background:rgba(255,255,255,.15); color:#fff; }
   .card { background:#fff; border:1px solid var(--border); border-radius:8px; padding:18px 20px; margin-bottom:16px; }
   label { font-weight:600; color:var(--dark); font-size:14px; display:block; margin-bottom:6px; }
   label span { font-weight:400; color:#888; margin-left:8px; font-size:13px; }
@@ -49,8 +51,11 @@
 <body>
 
 <div class="header">
-  <h1>Map Shop</h1>
-  <p>WooCommerce Product Description — Bulk CSV Generator</p>
+  <div>
+    <h1>Map Shop</h1>
+    <p>WooCommerce Product Description — Bulk CSV Generator</p>
+  </div>
+  <nav class="tabs"><a href="index.html" class="on">Products</a><a href="categories.html">Categories</a></nav>
 </div>
 
 <div class="card">

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Map Shop — Category CSV Generator</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #f4f7f3; min-height: 100vh; padding: 24px 16px; color: #222; }
+  :root { --green:#2d5a27; --mid:#4a7c42; --dark:#1a3a16; --light:#e8f0e7; --border:#b5cdb2; }
+  .header { background:var(--green); border-radius:10px; padding:20px 28px; margin-bottom:24px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  .header h1 { color:#fff; font-size:20px; font-weight:700; }
+  .header p  { color:#b5cdb2; font-size:13px; margin-top:2px; }
+  .tabs a    { color:#b5cdb2; font-size:13px; font-weight:600; padding:6px 12px; border-radius:6px; }
+  .tabs a.on { background:rgba(255,255,255,.15); color:#fff; }
+  .card { background:#fff; border:1px solid var(--border); border-radius:8px; padding:18px 20px; margin-bottom:16px; }
+  label { font-weight:600; color:var(--dark); font-size:14px; display:block; margin-bottom:6px; }
+  label span { font-weight:400; color:#888; margin-left:8px; font-size:13px; }
+  textarea {
+    width:100%; border:1px solid var(--border); border-radius:6px;
+    padding:8px 12px; font-size:13px; outline:none; background:#fafcfa;
+    font-family:monospace; color:#333; transition:border-color .15s; resize:vertical;
+  }
+  textarea:focus { border-color:var(--mid); }
+  .btns { margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; }
+  button { border:none; border-radius:6px; padding:9px 20px; font-weight:600; font-size:13.5px; cursor:pointer; color:#fff; }
+  button:disabled { background:#ccc!important; cursor:not-allowed; opacity:.6; }
+  .btn-parse { background:var(--mid); }
+  .btn-run   { background:var(--green); }
+  .btn-retry { background:#b7791f; }
+  .btn-dl    { background:#1a5276; }
+  .summary { background:var(--light); border:1px solid var(--border); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--dark); display:flex; gap:20px; flex-wrap:wrap; }
+  .tbl-wrap { overflow-x:auto; border-radius:8px; border:1px solid var(--border); background:#fff; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead tr { background:var(--green); color:#fff; }
+  th { padding:10px 14px; text-align:left; font-weight:600; white-space:nowrap; }
+  td { padding:9px 14px; vertical-align:top; border-bottom:1px solid var(--border); }
+  tr:last-child td { border-bottom:none; }
+  tbody tr:nth-child(even) td { background:#fafcfa; }
+  .badge { border-radius:12px; padding:3px 10px; font-weight:600; font-size:11.5px; white-space:nowrap; display:inline-block; }
+  a { color:var(--mid); text-decoration:none; font-size:11px; }
+  .empty { text-align:center; color:#aaa; padding:48px 0; font-size:14px; }
+  .map-status { font-size:12.5px; margin-top:6px; padding:6px 10px; border-radius:5px; }
+  .map-ok   { background:#d4edda; color:#155724; }
+  .map-err  { background:#f8d7da; color:#721c24; }
+  .map-load { background:#fffbe6; color:#a16800; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Map Shop</h1>
+    <p>WooCommerce Category Description — Bulk CSV Generator</p>
+  </div>
+  <nav class="tabs"><a href="index.html">Products</a><a href="categories.html" class="on">Categories</a></nav>
+</div>
+
+<div class="card">
+  <label>Category Mapping <span>— loaded from ProductCategorySlugs.csv in your GitHub repo</span></label>
+  <div class="map-status map-load" id="mapStatus">⏳ Loading category mapping…</div>
+</div>
+
+<div class="card">
+  <label>Paste rows from Google Sheets <span>— Category URL · Google Doc link</span></label>
+  <textarea id="pasted" rows="8" placeholder="https://www.mapshop.com/wall-maps/continent-wall-maps/europe-continent-wall-maps/&#9;https://docs.google.com/document/d/ABC123/edit&#10;..."></textarea>
+  <div class="btns">
+    <button class="btn-parse" id="btnParse" onclick="handleParse()" disabled>Parse Rows</button>
+    <button class="btn-run"   id="btnRun"   onclick="handleRun()" disabled>Run</button>
+    <button class="btn-retry" id="btnRetry" onclick="handleRetryErrors()" style="display:none">↻ Retry Errors</button>
+    <button class="btn-dl"    id="btnDl"    onclick="handleDownload()" style="display:none">⬇ Download CSV</button>
+  </div>
+</div>
+
+<div class="summary" id="summary" style="display:none">
+  <span>Total: <b id="sTotal">0</b></span>
+  <span style="color:#155724">✓ Done: <b id="sDone">0</b></span>
+  <span style="color:#721c24">✗ Errors: <b id="sErr">0</b></span>
+  <span style="color:#856404">? No match: <b id="sNoMatch">0</b></span>
+  <span style="color:#a16800">⏳ Pending: <b id="sPend">0</b></span>
+</div>
+
+<div id="tblWrap"><div class="empty">Paste your spreadsheet rows above and click <b>Parse Rows</b> to begin.</div></div>
+
+<script>
+const PROXY_URL = "https://script.google.com/macros/s/AKfycbycrE2HwuGh_UQumc4PvJMobSr6C2ta59AUan6hGeRNGae4TMSFS29pntcHggnb_Z-SAQ/exec";
+const CSV_URL   = "https://raw.githubusercontent.com/ethan-mapshop/product-descriptions/main/ProductCategorySlugs.csv";
+
+let slugMap = {}; // url -> slug
+let rows = [];
+let running = false;
+
+const STATUS_COLORS = {
+  Pending:    { bg:"#f5f5f5", text:"#666" },
+  Fetching:   { bg:"#fffbe6", text:"#a16800" },
+  Done:       { bg:"#d4edda", text:"#155724" },
+  Error:      { bg:"#f8d7da", text:"#721c24" },
+  "No Match": { bg:"#fff3cd", text:"#856404" },
+};
+
+// Load category mapping on startup
+async function loadSlugMap() {
+  const status = document.getElementById("mapStatus");
+  try {
+    const res = await fetch(CSV_URL);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const [header = [], ...data] = parseCsv(await res.text());
+    const col = name => header.findIndex(h => h.trim().toLowerCase() === name);
+    const urlCol = col("term permalink"), slugCol = col("term slug");
+    if (urlCol < 0 || slugCol < 0) throw new Error("no 'Term Permalink' / 'Term Slug' columns");
+    for (const r of data) {
+      const url = (r[urlCol] || "").trim(), slug = (r[slugCol] || "").trim();
+      if (url && slug) slugMap[normaliseUrl(url)] = slug;
+    }
+    status.className = "map-status map-ok";
+    status.textContent = `✓ Category mapping loaded — ${Object.keys(slugMap).length.toLocaleString()} categories`;
+    document.getElementById("btnParse").disabled = false;
+  } catch(e) {
+    status.className = "map-status map-err";
+    status.textContent = "✗ Failed to load category mapping: " + e.message;
+  }
+}
+
+function parseCsv(text) {
+  const out = [];
+  let row = [], field = "", quoted = false;
+  text = text.replace(/^﻿/, "");
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c !== '"') field += c;
+      else if (text[i + 1] === '"') { field += '"'; i++; }
+      else quoted = false;
+    }
+    else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); out.push(row); row = []; field = "";
+    }
+    else field += c;
+  }
+  if (field || row.length) { row.push(field); out.push(row); }
+  return out;
+}
+
+// host + path, lowercased, ignoring http(s), www. and trailing slashes
+function normaliseUrl(url) {
+  const s = url.trim();
+  try {
+    const u = new URL(/^https?:\/\//i.test(s) ? s : "https://" + s);
+    return (u.hostname.replace(/^www\./, "") + u.pathname).replace(/\/+$/, "").toLowerCase();
+  } catch { return s.replace(/\/+$/, "").toLowerCase(); }
+}
+
+function extractDocId(url) {
+  const m = url.trim().replace(/['"]/g,"").match(/\/document\/d\/([a-zA-Z0-9_-]{20,})/);
+  return m ? m[1] : null;
+}
+
+// Text between "New semantic optimized version:" and the divider line / "Current version:"
+function extractNewVersion(text) {
+  const marker = text.match(/New\s+semantic\s+optimized\s+version\s*:/i) || text.match(/New\s+version\s*:/i);
+  if (!marker) return null;
+  const after = text.slice(marker.index + marker[0].length).replace(/\r\n?/g, "\n");
+  const stop  = after.search(/\n[^\S\n]*(?:[-=_*—–─]{3,}[^\S\n]*(?=\n|$)|Current\s+version\s*:)/i);
+  return (stop !== -1 ? after.slice(0, stop) : after)
+    .replace(/[^\S\n]+$/gm, "")  // trailing spaces
+    .replace(/\n{3,}/g, "\n\n")  // at most one blank line between paragraphs
+    .trim();
+}
+
+function handleParse() {
+  const raw = document.getElementById("pasted").value.trim();
+  if (!raw) return;
+  rows = raw.split(/\r?\n/).map((line, i) => {
+    const cols = line.split("\t");
+    const categoryUrl = cols[0]?.trim() || "";
+    const slug = slugMap[normaliseUrl(categoryUrl)] || "";
+    return {
+      id: i,
+      categoryUrl,
+      docUrl:      cols[1]?.trim() || "",
+      slug,
+      status:      slug ? "Pending" : "No Match",
+      description: "",
+      error:       slug ? "" : "URL not found in ProductCategorySlugs.csv",
+    };
+  }).filter(r => r.categoryUrl || r.docUrl);
+  renderTable();
+}
+
+function updateRow(id, patch) {
+  const r = rows.find(r => r.id === id);
+  if (r) Object.assign(r, patch);
+  renderTable();
+}
+
+function renderTable() {
+  updateSummary();
+
+  const runnable  = rows.filter(r => r.status !== "No Match").length;
+  const doneCount = rows.filter(r => r.status === "Done").length;
+  const errCount  = rows.filter(r => r.status === "Error").length;
+
+  const btnRun = document.getElementById("btnRun");
+  btnRun.disabled    = running || !runnable;
+  btnRun.textContent = running ? "Processing…" : (runnable ? `Run (${runnable} rows)` : "Run");
+
+  const btnRetry = document.getElementById("btnRetry");
+  btnRetry.style.display = errCount > 0 ? "inline-block" : "none";
+  btnRetry.disabled      = running;
+  btnRetry.textContent   = `↻ Retry Errors (${errCount})`;
+
+  const dl = document.getElementById("btnDl");
+  dl.style.display = doneCount > 0 ? "inline-block" : "none";
+  dl.textContent   = `⬇ Download CSV (${doneCount} rows)`;
+
+  if (!rows.length) {
+    document.getElementById("tblWrap").innerHTML = `<div class="empty">Paste your spreadsheet rows above and click <b>Parse Rows</b> to begin.</div>`;
+    return;
+  }
+
+  let html = `<div class="tbl-wrap"><table><thead><tr>
+    <th>#</th><th>Slug</th><th>Category URL</th><th>Doc</th><th>Status</th><th style="min-width:260px">Preview / Error</th>
+  </tr></thead><tbody>`;
+  rows.forEach((r, i) => {
+    const sc = STATUS_COLORS[r.status] || STATUS_COLORS.Pending;
+    const preview = r.error
+      ? `<span style="color:#721c24">${esc(r.error)}</span>`
+      : r.description
+        ? esc(r.description.slice(0,160)) + (r.description.length > 160 ? "…" : "")
+        : `<span style="color:#bbb">—</span>`;
+    html += `<tr>
+      <td>${i+1}</td>
+      <td style="font-family:monospace;font-size:11.5px;${r.slug ? '' : 'color:#a16800'}">${r.slug ? esc(r.slug) : "(no slug match)"}</td>
+      <td style="font-size:11.5px;max-width:220px;word-break:break-all">${esc(r.categoryUrl)}</td>
+      <td>${r.docUrl ? `<a href="${esc(r.docUrl)}" target="_blank">Open ↗</a>` : "—"}</td>
+      <td><span class="badge" style="background:${sc.bg};color:${sc.text}">${r.status}</span></td>
+      <td style="font-size:11.5px;max-width:340px">${preview}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>`;
+  document.getElementById("tblWrap").innerHTML = html;
+}
+
+function updateSummary() {
+  const s = document.getElementById("summary");
+  if (!rows.length) { s.style.display = "none"; return; }
+  s.style.display = "flex";
+  const count = (...st) => rows.filter(r => st.includes(r.status)).length;
+  document.getElementById("sTotal").textContent   = rows.length;
+  document.getElementById("sDone").textContent    = count("Done");
+  document.getElementById("sErr").textContent     = count("Error");
+  document.getElementById("sNoMatch").textContent = count("No Match");
+  document.getElementById("sPend").textContent    = count("Pending", "Fetching");
+}
+
+async function callProxy(params) {
+  const url = PROXY_URL + "?" + Object.entries(params).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+async function processRow(row) {
+  updateRow(row.id, { status:"Fetching", error:"" });
+  const docId = extractDocId(row.docUrl);
+  if (!docId) { updateRow(row.id, { status:"Error", error:"Could not parse Doc ID" }); return; }
+
+  let docText;
+  try {
+    const data = await callProxy({ action:"fetchDoc", docId });
+    docText = data.text || "";
+  } catch(e) { updateRow(row.id, { status:"Error", error:"Fetch: " + e.message }); return; }
+
+  const description = extractNewVersion(docText);
+  if (!description) { updateRow(row.id, { status:"Error", error:"No text after 'New semantic optimized version:'" }); return; }
+  updateRow(row.id, { status:"Done", description });
+}
+
+async function processRows(list) {
+  const BATCH = 3;
+  for (let i = 0; i < list.length; i += BATCH) {
+    await Promise.all(list.slice(i, i + BATCH).map(r => processRow(r)));
+    if (i + BATCH < list.length) await new Promise(r => setTimeout(r, 800));
+  }
+}
+
+async function handleRun() {
+  const list = rows.filter(r => r.status !== "No Match");
+  if (running || !list.length) return;
+  running = true;
+  renderTable();
+  await processRows(list);
+  running = false;
+  renderTable();
+}
+
+async function handleRetryErrors() {
+  if (running) return;
+  const errored = rows.filter(r => r.status === "Error");
+  if (!errored.length) return;
+  errored.forEach(r => { r.status = "Pending"; r.error = ""; });
+  running = true;
+  renderTable();
+  await processRows(errored);
+  running = false;
+  renderTable();
+}
+
+function handleDownload() {
+  const q = s => `"${String(s).replace(/"/g,'""')}"`;
+  const done = rows.filter(r => r.status === "Done");
+  const csv = ["slug,description", ...done.map(r => `${q(r.slug)},${q(r.description)}`)].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type:"text/csv;charset=utf-8;" }));
+  a.download = "mapshop_category_descriptions.csv";
+  a.click();
+}
+
+function esc(s) {
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// Boot
+loadSlugMap();
+</script>
+</body>
+</html>
